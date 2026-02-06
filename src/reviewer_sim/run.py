@@ -1,3 +1,19 @@
+"""
+Pipeline runner for reviewer simulation.
+
+Reads input JSONL, generates reviews using configured provider, evaluates against
+human reviews, and writes results to output JSONL.
+
+Usage:
+    PYTHONPATH=src python -m reviewer_sim.run
+
+Environment variables:
+    INPUT_JSONL: Input file path (default: outputs/review_subset.jsonl)
+    OUTPUT_JSONL: Output file path (default: outputs/results.jsonl)
+    MODEL_PROVIDER: mock or llamacpp (default: mock)
+    MODEL_PATH: Path to GGUF model (required for llamacpp)
+"""
+
 import json
 import os
 from pathlib import Path
@@ -5,7 +21,6 @@ from pathlib import Path
 from tqdm import tqdm
 
 from reviewer_sim.ingest.load_jsonl import load_jsonl
-from reviewer_sim.generate.generator import generate_review
 from reviewer_sim.generate.providers import get_generator
 from reviewer_sim.evaluate.metrics import evaluate
 from reviewer_sim.utils.config import load_model_config
@@ -21,7 +36,7 @@ def main() -> None:
     if config.model_path:
         print(f"Model path: {config.model_path}")
 
-    input_path = Path(os.environ.get("INPUT_JSONL", "data/sample/examples.jsonl"))
+    input_path = Path(os.environ.get("INPUT_JSONL", "data/processed/review_subset.jsonl"))
     output_path = Path(os.environ.get("OUTPUT_JSONL", "outputs/results.jsonl"))
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -33,7 +48,7 @@ def main() -> None:
     with open(output_path, "w", encoding="utf-8") as f:
         for ex in tqdm(examples, desc="Simulating reviews"):
             try:
-                generated = generate_review(ex, generator)
+                generated = generator.generate(ex)
                 metrics = evaluate(ex, generated)
 
                 row = {
