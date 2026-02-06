@@ -1,19 +1,19 @@
 PYTHONPATH := $(shell pwd)/src
-INPUT_JSONL ?= outputs/review_subset.jsonl
+INPUT_JSONL ?= data/processed/review_subset.jsonl
 OUTPUT_JSONL ?= outputs/results.jsonl
 
 # Export clean subset from SQLite
 export:
 	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.export_review_subset \
 		--db-path data/gen_review.db \
-		--out-path outputs/review_subset.jsonl \
+		--out-path data/processed/review_subset.jsonl \
 		--n 200 --seed 42 --min-year 2021 --min-review-chars 50
 
 # Enrich with LLM-classified primary areas (requires TOGETHER_API_KEY)
 enrich:
 	PYTHONPATH=$(PYTHONPATH) python -m reviewer_sim.ingest.enrich_primary_area \
-		--in-path outputs/review_subset.jsonl \
-		--out-path outputs/review_subset_enriched.jsonl \
+		--in-path data/processed/review_subset.jsonl \
+		--out-path data/processed/review_subset_enriched.jsonl \
 		--model "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
 # Run review simulation pipeline
@@ -24,7 +24,7 @@ run:
 run-mock:
 	PYTHONPATH=$(PYTHONPATH) \
 	MODEL_PROVIDER=mock \
-	INPUT_JSONL=outputs/review_subset.jsonl \
+	INPUT_JSONL=data/processed/review_subset.jsonl \
 	OUTPUT_JSONL=outputs/results_mock.jsonl \
 	python -m reviewer_sim.run
 
@@ -34,7 +34,7 @@ run-llamacpp:
 	PYTHONPATH=$(PYTHONPATH) \
 	MODEL_PROVIDER=llamacpp \
 	MODEL_PATH=$(MODEL_PATH) \
-	INPUT_JSONL=outputs/review_subset.jsonl \
+	INPUT_JSONL=data/processed/review_subset.jsonl \
 	OUTPUT_JSONL=outputs/results_llamacpp.jsonl \
 	python -m reviewer_sim.run
 

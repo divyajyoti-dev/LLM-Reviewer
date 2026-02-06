@@ -36,7 +36,7 @@ def main() -> None:
     if config.model_path:
         print(f"Model path: {config.model_path}")
 
-    input_path = Path(os.environ.get("INPUT_JSONL", "outputs/review_subset.jsonl"))
+    input_path = Path(os.environ.get("INPUT_JSONL", "data/processed/review_subset.jsonl"))
     output_path = Path(os.environ.get("OUTPUT_JSONL", "outputs/results.jsonl"))
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
