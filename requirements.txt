@@ -1,0 +1,7 @@
+tqdm
+scikit-learn
+numpy
+pandas
+python-dotenv
+pydantic
+llama-cpp-python
