@@ -1,45 +1,15 @@
-# reviewer_sim (Exploratory Version)
+# reviewer_sim
 
-Research prototype for LLM-based peer review simulation. This exploratory version enables comparison between human reviews and AI-generated reviews using local GGUF models without relying on external API services.
+Research prototype for LLM-based peer review simulation. Enables comparison between human reviews and AI-generated reviews using local GGUF models or cloud APIs.
 
 ---
 
 ## Key Capabilities
 
-- Export real peer review data from SQLite database to JSONL format
-- Generate synthetic reviews using either a deterministic mock or a local Llama model
-- Evaluate generated reviews against human reviews using text similarity metrics
-- Run entirely offline with GPU acceleration on Apple Silicon
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         reviewer_sim Pipeline                        │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐          │
-│  │    INGEST    │───▶│   GENERATE   │───▶│   EVALUATE   │          │
-│  └──────────────┘    └──────────────┘    └──────────────┘          │
-│         │                   │                   │                   │
-│         ▼                   ▼                   ▼                   │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐          │
-│  │  SQLite DB   │    │   Provider   │    │   Metrics    │          │
-│  │  → JSONL     │    │   Interface  │    │  Comparison  │          │
-│  └──────────────┘    └──────────────┘    └──────────────┘          │
-│                             │                                        │
-│              ┌──────────────┴──────────────┐                        │
-│              ▼                              ▼                        │
-│       ┌────────────┐              ┌─────────────────┐               │
-│       │    Mock    │              │   LlamaCpp      │               │
-│       │  Generator │              │   Generator     │               │
-│       │(deterministic)            │  (GGUF + Metal) │               │
-│       └────────────┘              └─────────────────┘               │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+- **Data Ingestion**: Export clean subsets from SQLite with year filtering, min-length validation, deterministic sampling
+- **LLM Enrichment**: Classify papers by research area using Together AI / cloud LLMs
+- **Review Generation**: Generate synthetic reviews using mock or local Llama models (GGUF + Metal)
+- **Evaluation**: Compare generated vs human reviews using TF-IDF cosine, Jaccard similarity, score diff
 
 ---
 
@@ -48,29 +18,30 @@ Research prototype for LLM-based peer review simulation. This exploratory versio
 ```
 LLM-Reviewer/
 ├── data/
-│   ├── gen_review.db              # Source database (1.5GB)
+│   ├── gen_review.db                    # Source database (~1.5GB, not committed)
 │   └── processed/
-│       └── gen_review_sample.jsonl # Exported samples
+│       ├── review_subset.jsonl          # Clean export (200 papers, 2021+)
+│       └── review_subset_enriched.jsonl # + LLM-classified primary_area
 ├── models/
-│   └── *.gguf                     # GGUF models (not committed)
-├── outputs/
-│   ├── results_mock.jsonl
-│   └── results_llamacpp.jsonl
+│   └── *.gguf                           # GGUF models (not committed)
+├── outputs/                             # Generated results (not committed)
 ├── scripts/
-│   └── summarize_results.py
+│   └── summarize_results.py             # Results summary tool
 ├── src/reviewer_sim/
 │   ├── __init__.py
-│   ├── run.py                     # Entry point
+│   ├── run.py                           # Pipeline entry point
 │   ├── ingest/
-│   │   ├── gen_review_sqlite.py   # SQLite exporter
-│   │   └── load_jsonl.py          # JSONL loader
+│   │   ├── export_review_subset.py      # SQLite → JSONL exporter
+│   │   ├── enrich_primary_area.py       # LLM classification enrichment
+│   │   └── load_jsonl.py                # JSONL loader utility
 │   ├── generate/
-│   │   ├── generator.py           # Thin wrapper
-│   │   └── providers.py           # Mock + LlamaCpp generators
+│   │   └── providers.py                 # Mock + LlamaCpp generators
 │   ├── evaluate/
-│   │   └── metrics.py             # Evaluation functions
+│   │   └── metrics.py                   # Evaluation metrics
 │   └── utils/
-│       └── config.py              # ModelConfig + validation
+│       └── config.py                    # ModelConfig + validation
+├── tests/
+│   └── test_export_review_subset.py     # Pytest tests
 ├── .gitignore
 ├── Dockerfile
 ├── Makefile
@@ -92,94 +63,127 @@ pip install -r requirements.txt
 CMAKE_ARGS="-DLLAMA_METAL=on" FORCE_CMAKE=1 pip install llama-cpp-python
 ```
 
+---
+
+## Data Pipeline
+
+### 1. Export from SQLite
+Export a clean subset of papers with reviews:
+
+```bash
+make export
+```
+
+Or with custom options:
+```bash
+PYTHONPATH=src python -m reviewer_sim.ingest.export_review_subset \
+  --db-path data/gen_review.db \
+  --out-path data/processed/review_subset.jsonl \
+  --n 200 --seed 42 --min-year 2021 --min-review-chars 50
+```
+
+**Output schema:**
+```json
+{
+  "paper_id": "abc123",
+  "title": "Paper Title",
+  "abstract": "...",
+  "primary_area": "general",
+  "year": 2022,
+  "review": {"main_review": "..."},
+  "meta": {
+    "source": "gen_review_sqlite",
+    "filters": {"min_year": 2021, "min_review_chars": 50},
+    "exported_at": "2024-01-01T00:00:00+00:00"
+  }
+}
+```
+
+### 2. Enrich with LLM Classification
+Classify papers by research area using Together AI:
+
+```bash
+export TOGETHER_API_KEY="your-key"
+make enrich
+```
+
+Or with custom options:
+```bash
+PYTHONPATH=src python -m reviewer_sim.ingest.enrich_primary_area \
+  --in-path data/processed/review_subset.jsonl \
+  --out-path data/processed/review_subset_enriched.jsonl \
+  --model "mistralai/Mixtral-8x7B-Instruct-v0.1" \
+  --max-concurrency 8
+```
+
+**Added fields:**
+```json
+{
+  "primary_area_llm": "ml",
+  "primary_area_llm_confidence": 0.9,
+  "meta": {
+    "llm_labeling": {
+      "provider": "together",
+      "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+      "prompt_version": "area-v1",
+      "temperature": 0,
+      "timestamp_utc": "..."
+    }
+  }
+}
+```
+
+**Label distribution (200 papers):**
+| Label | Count | % |
+|-------|-------|---|
+| ml | 128 | 64% |
+| computer_vision | 25 | 12.5% |
+| nlp | 23 | 11.5% |
+| theory | 9 | 4.5% |
+| robotics | 7 | 3.5% |
+| bio_medical | 3 | 1.5% |
+| graphics | 2 | 1% |
+| other | 2 | 1% |
+| multi_modal | 1 | 0.5% |
+
+---
+
+## Review Generation
+
 ### Run with Mock Generator
 ```bash
 make run-mock
 ```
 
-### Run with Local LLM
+### Run with Local LLM (GGUF)
 ```bash
 MODEL_PATH=models/llama-3-8b-instruct-q4_k_m.gguf make run-llamacpp
 ```
 
----
-
-## Data Flow
-
-### Input: Gen-Review Database
-- **Source**: `data/gen_review.db` (SQLite)
-- **Tables**: `SUBMISSION`, `REVIEW`, `GENAI_REVIEW`
-- **Content**: Real peer reviews from academic conferences
-
-### Export to JSONL
+### Full Custom Run
 ```bash
-make export
+PYTHONPATH=src \
+MODEL_PROVIDER=llamacpp \
+MODEL_PATH=models/your-model.gguf \
+INPUT_JSONL=data/processed/review_subset.jsonl \
+OUTPUT_JSONL=outputs/results.jsonl \
+python -m reviewer_sim.run
 ```
-
-### Per-Record Schema
-```json
-{
-  "paper_id": "...",
-  "title": "...",
-  "abstract": "...",
-  "metadata": { ... },
-  "reviewer_profile": {
-    "expertise": "representation learning",
-    "tone": "neutral",
-    "seniority": "senior"
-  },
-  "human_review": {
-    "text": "...",
-    "rating": 7,
-    "confidence": 4
-  }
-}
-```
-
-### Output Schema
-```json
-{
-  "paper_id": "...",
-  "generated_review": {
-    "text": "...",
-    "score": 8
-  },
-  "metrics": {
-    "tfidf_cosine": 0.155,
-    "keyword_jaccard": 0.079,
-    "score_abs_diff": 1.0
-  }
-}
-```
-
----
-
-## Reviewer Profile Augmentation
-
-Each exported example includes a synthesized reviewer persona:
-
-| Field | Source | Values |
-|-------|--------|--------|
-| `expertise` | `SUBMISSION.primary_area` | e.g., "representation learning", "NLP" |
-| `tone` | Deterministic hash of `paper_id` | `"critical"` / `"neutral"` / `"positive"` |
-| `seniority` | Deterministic hash of `paper_id` | `"junior"` / `"senior"` |
-
-Deterministic assignment ensures reproducibility across runs with the same seed.
 
 ---
 
 ## Provider Interface
 
 ### MockGenerator
-- **Purpose**: Fast iteration, testing, baseline comparison
-- **Behavior**: Deterministic output based on `reviewer_profile`
-- **Score adjustment**: `critical` (-2), `neutral` (0), `positive` (+2) from base score of 6
+- Deterministic output based on `reviewer_profile`
+- Score adjustment: `critical` (-2), `neutral` (0), `positive` (+2) from base 6
+- Fast iteration and testing
 
 ### LlamaCppGenerator
-- **Purpose**: Real LLM inference with local GGUF models
-- **Model loading**: Once in `__init__`, reused for all examples
-- **GPU acceleration**: Metal on Apple Silicon (`n_gpu_layers=-1`)
-- **JSON output**: Strict format requested, robust parsing with fallback
+- Local GGUF model inference via llama-cpp-python
+- Metal GPU acceleration on Apple Silicon
+- Model loaded once, reused for all examples
+- Robust JSON parsing with fallback
 
 ---
 
@@ -187,16 +191,16 @@ Deterministic assignment ensures reproducibility across runs with the same seed.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_PROVIDER` | `"mock"` | `mock` or `llamacpp` |
+| `MODEL_PROVIDER` | `mock` | `mock` or `llamacpp` |
 | `MODEL_PATH` | None | Path to GGUF file (required for llamacpp) |
 | `TEMPERATURE` | `0.2` | Sampling temperature |
 | `TOP_P` | `0.95` | Nucleus sampling threshold |
 | `MAX_TOKENS` | `600` | Maximum generation length |
 | `N_CTX` | `4096` | Context window size |
 | `N_GPU_LAYERS` | `-1` | GPU layers (-1 = all) |
-| `SYSTEM_PROMPT` | (built-in) | LLM system instruction |
-| `INPUT_JSONL` | `data/sample/examples.jsonl` | Input file path |
-| `OUTPUT_JSONL` | `outputs/results.jsonl` | Output file path |
+| `INPUT_JSONL` | `data/processed/review_subset.jsonl` | Input file |
+| `OUTPUT_JSONL` | `outputs/results.jsonl` | Output file |
+| `TOGETHER_API_KEY` | None | API key for enrichment |
 
 ---
 
@@ -206,11 +210,11 @@ Deterministic assignment ensures reproducibility across runs with the same seed.
 |--------|-------------|-------|
 | `tfidf_cosine` | Cosine similarity of TF-IDF vectors | 0-1 (higher = more similar) |
 | `keyword_jaccard` | Jaccard index of token sets | 0-1 (higher = more overlap) |
-| `score_abs_diff` | Absolute difference between ratings | 0+ (lower = better agreement) |
+| `score_abs_diff` | Absolute difference between ratings | 0+ (lower = better) |
 
 ### Summarize Results
 ```bash
-python scripts/summarize_results.py outputs/results_llamacpp.jsonl
+make summarize OUTPUT_JSONL=outputs/results.jsonl
 ```
 
 ---
@@ -219,60 +223,42 @@ python scripts/summarize_results.py outputs/results_llamacpp.jsonl
 
 | Target | Description |
 |--------|-------------|
-| `make export` | SQLite → JSONL export |
-| `make run` | Run pipeline with defaults |
+| `make export` | Export 200 papers from SQLite (2021+) |
+| `make enrich` | Enrich with LLM-classified primary areas |
+| `make run` | Run review simulation pipeline |
 | `make run-mock` | Run with mock generator |
 | `make run-llamacpp` | Run with GGUF model (requires `MODEL_PATH`) |
-| `make smoke` | Quick 1-example test |
+| `make test` | Run pytest tests |
 | `make test-imports` | Verify all modules import |
+| `make summarize` | Summarize results JSONL |
 
 ---
 
-## Experimental Results
+## Database Statistics
 
-### Mock Generator Baseline
-| Metric | Mean | Median |
-|--------|------|--------|
-| tfidf_cosine | 0.1361 | 0.1395 |
-| keyword_jaccard | 0.0874 | 0.0769 |
+| Table | Count |
+|-------|-------|
+| Papers (SUBMISSION) | 32,652 |
+| Human Reviews (REVIEW) | 124,615 |
+| Papers with non-empty reviews | 9,766 |
+| GenAI Reviews | 81,850 |
 
-### LlamaCpp (Llama 3 8B Q4_K_M)
-| Metric | Mean | Median |
-|--------|------|--------|
-| tfidf_cosine | **0.1551** | **0.1652** |
-| keyword_jaccard | 0.0795 | 0.0762 |
-| score_abs_diff | 100% non-null | - |
-
-**Key Observation**: LLM reviews show ~14% higher semantic similarity (tfidf_cosine) vs mock.
+**Processed subset:** 200 papers from 2021+ with reviews ≥50 chars
 
 ---
 
-## Sample Generated Review (LlamaCpp)
+## Tests
 
-**Paper**: "Online Learning Rate Adaptation with Hypergradient Descent"
-
-```json
-{
-  "text": "The authors propose a novel method for adapting the learning rate 
-           in gradient-based optimizers, which is easy to implement and shows 
-           promising results in various optimization problems. The concept of 
-           hypergradient descent is well-explained, and the additional 
-           computational cost is minimal. However, the paper could benefit 
-           from more detailed analysis of the method's performance in different 
-           scenarios and a more comprehensive comparison with existing methods. 
-           Overall, the paper is well-written and presents an interesting 
-           contribution to the field. Score: 8",
-  "score": 8
-}
+```bash
+make test
 ```
 
----
-
-## Error Handling
-
-- **Per-example try/except**: Pipeline continues even if individual examples fail
-- **JSON parsing fallback**: If LLM output isn't valid JSON, returns `{"text": raw_output, "score": None}`
-- **Config validation**: Clear error messages for missing `MODEL_PATH` when using llamacpp
+5 tests covering:
+- Year filtering
+- Deterministic sampling
+- Empty review filtering
+- Short review filtering
+- Output schema validation
 
 ---
 
@@ -283,7 +269,7 @@ docker build -t reviewer_sim .
 docker run -v $(pwd)/outputs:/app/outputs reviewer_sim
 ```
 
-For llamacpp, mount the models directory:
+For llamacpp:
 ```bash
 docker run -v $(pwd)/models:/app/models \
            -v $(pwd)/outputs:/app/outputs \
@@ -300,39 +286,32 @@ docker run -v $(pwd)/models:/app/models \
 |----------|-----------|
 | Provider pattern | Swap mock↔LLM with one env var |
 | Model loaded once | Avoid 30+ second reload per example |
-| Deterministic mock | Reproducible baselines for testing |
-| JSON with fallback | Pipeline never crashes on bad output |
+| Deterministic export | Same seed = identical output |
+| LLM enrichment separate | Original data unchanged, derived datasets |
+| Per-example error handling | Pipeline continues on failures |
 | Config via env vars | Easy Docker/CI integration |
-| Makefile targets | One-command reproducible runs |
 | models/ in .gitignore | Don't commit multi-GB model files |
+
+---
+
+## Experimental Results
+
+### Mock vs LlamaCpp (Llama 3 8B Q4_K_M)
+
+| Metric | Mock | LlamaCpp |
+|--------|------|----------|
+| tfidf_cosine (mean) | 0.136 | **0.155** |
+| keyword_jaccard (mean) | 0.087 | 0.080 |
+
+LLM reviews show ~14% higher semantic similarity to human reviews.
 
 ---
 
 ## Future Work
 
-1. **Prompt engineering**: Experiment with different system prompts and review templates
-2. **Model comparison**: Test other GGUF models (Mistral, Phi, etc.)
-3. **Evaluation expansion**: Add BLEU, ROUGE, BERTScore metrics
-4. **Reviewer profile impact**: Analyze how tone/expertise affect generated reviews
-5. **Human evaluation**: Blind comparison study of mock vs LLM vs human reviews
-6. **Fine-tuning**: Create domain-specific adapter for peer review style
-
----
-
-## Full Custom Run Example
-
-```bash
-MODEL_PROVIDER=llamacpp \
-MODEL_PATH=models/llama-3-8b-instruct-q4_k_m.gguf \
-N_CTX=4096 \
-MAX_TOKENS=400 \
-TEMPERATURE=0.2 \
-TOP_P=0.95 \
-INPUT_JSONL=data/processed/gen_review_sample.jsonl \
-OUTPUT_JSONL=outputs/results.jsonl \
-PYTHONPATH=src python -m reviewer_sim.run
-```
-
----
-
-*Exploratory Version - Research Prototype*
+1. Prompt engineering for review quality
+2. Model comparison (Mistral, Phi, etc.)
+3. Additional metrics (BLEU, ROUGE, BERTScore)
+4. Reviewer profile impact analysis
+5. Human evaluation study
+6. Domain-specific fine-tuning
