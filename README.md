@@ -1,4 +1,4 @@
-# reviewer_sim
+# LLM-Reviewer
 
 Research prototype for LLM-based peer review simulation. Enables comparison between human reviews and AI-generated reviews using local GGUF models or cloud APIs.
 
