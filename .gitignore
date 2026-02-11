@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 outputs/
+experiments/outputs/
 data/private/
 data/*.db
 .DS_Store
