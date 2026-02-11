@@ -29,9 +29,15 @@ Example usage:
     --model-b "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
 Output files:
+  - evaluation_report.json: Consolidated report with all data
   - topic_eval.csv: Per-paper-pair metrics
   - topic_eval_summary.md: Aggregated summary with statistics
-  - topics_extracted.jsonl: Raw extracted topics per review (for debugging)
+  - topics_extracted.jsonl: Raw extracted topics per review
+  - charts/: Directory with visualization charts
+    - jaccard_distribution.png: Histogram of Jaccard scores
+    - jaccard_by_model_pair.png: Bar chart comparing model pairs
+    - topic_frequency.png: Top topics by frequency
+    - topics_per_review.png: Distribution of topics per review
 """
 
 import argparse
@@ -473,6 +479,353 @@ def write_summary(
         f.write("\n".join(lines))
 
 
+def generate_charts(
+    metrics: list[PairMetrics],
+    topic_results: list[TopicResult],
+    reviews: list[dict],
+    output_dir: Path,
+) -> list[str]:
+    """Generate visualization charts and return list of created files."""
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+    except ImportError:
+        print("Warning: matplotlib not installed, skipping charts")
+        return []
+    
+    charts_dir = output_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    created_files = []
+    
+    # Set style
+    plt.style.use('seaborn-v0_8-whitegrid') if 'seaborn-v0_8-whitegrid' in plt.style.available else None
+    
+    # 1. Jaccard Distribution Histogram
+    if metrics:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        jaccards = [m.jaccard for m in metrics]
+        ax.hist(jaccards, bins=20, edgecolor='black', alpha=0.7, color='steelblue')
+        ax.axvline(mean(jaccards), color='red', linestyle='--', linewidth=2, label=f'Mean: {mean(jaccards):.3f}')
+        ax.axvline(median(jaccards), color='orange', linestyle='--', linewidth=2, label=f'Median: {median(jaccards):.3f}')
+        ax.set_xlabel('Jaccard Similarity', fontsize=12)
+        ax.set_ylabel('Count', fontsize=12)
+        ax.set_title('Distribution of Topic Overlap (Jaccard Similarity)', fontsize=14)
+        ax.legend()
+        ax.set_xlim(0, 1)
+        
+        chart_path = charts_dir / "jaccard_distribution.png"
+        plt.tight_layout()
+        plt.savefig(chart_path, dpi=150)
+        plt.close()
+        created_files.append(str(chart_path))
+    
+    # 2. Jaccard by Model Pair (Bar Chart)
+    if metrics:
+        by_pair: dict[tuple[str, str], list[float]] = defaultdict(list)
+        for m in metrics:
+            by_pair[(m.model_a, m.model_b)].append(m.jaccard)
+        
+        if by_pair:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            
+            pair_labels = []
+            means = []
+            stds = []
+            
+            for (ma, mb), jacs in sorted(by_pair.items()):
+                # Shorten model names for display
+                label_a = ma.split('/')[-1][:20]
+                label_b = mb.split('/')[-1][:20]
+                pair_labels.append(f"{label_a}\nvs\n{label_b}")
+                means.append(mean(jacs))
+                stds.append((max(jacs) - min(jacs)) / 2 if len(jacs) > 1 else 0)
+            
+            x = range(len(pair_labels))
+            bars = ax.bar(x, means, yerr=stds, capsize=5, color='steelblue', edgecolor='black', alpha=0.8)
+            ax.set_xticks(x)
+            ax.set_xticklabels(pair_labels, fontsize=9)
+            ax.set_ylabel('Mean Jaccard Similarity', fontsize=12)
+            ax.set_title('Topic Overlap by Model Pair', fontsize=14)
+            ax.set_ylim(0, 1)
+            
+            # Add value labels on bars
+            for bar, val in zip(bars, means):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, 
+                       f'{val:.3f}', ha='center', va='bottom', fontsize=10)
+            
+            chart_path = charts_dir / "jaccard_by_model_pair.png"
+            plt.tight_layout()
+            plt.savefig(chart_path, dpi=150)
+            plt.close()
+            created_files.append(str(chart_path))
+    
+    # 3. Topic Frequency (Top 20 topics)
+    if topic_results:
+        all_topics: Counter = Counter()
+        for tr in topic_results:
+            all_topics.update(tr.topics)
+        
+        if all_topics:
+            fig, ax = plt.subplots(figsize=(12, 8))
+            
+            top_topics = all_topics.most_common(20)
+            topics, counts = zip(*top_topics)
+            
+            y_pos = range(len(topics))
+            ax.barh(y_pos, counts, color='teal', edgecolor='black', alpha=0.8)
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(topics, fontsize=10)
+            ax.invert_yaxis()
+            ax.set_xlabel('Frequency', fontsize=12)
+            ax.set_title('Top 20 Most Frequent Topics', fontsize=14)
+            
+            # Add count labels
+            for i, count in enumerate(counts):
+                ax.text(count + 0.5, i, str(count), va='center', fontsize=9)
+            
+            chart_path = charts_dir / "topic_frequency.png"
+            plt.tight_layout()
+            plt.savefig(chart_path, dpi=150)
+            plt.close()
+            created_files.append(str(chart_path))
+    
+    # 4. Topics per Review by Model
+    if topic_results:
+        by_model: dict[str, list[int]] = defaultdict(list)
+        for tr in topic_results:
+            by_model[tr.model].append(len(tr.topics))
+        
+        if by_model:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            model_names = []
+            data = []
+            for model, counts in sorted(by_model.items()):
+                model_names.append(model.split('/')[-1][:25])
+                data.append(counts)
+            
+            bp = ax.boxplot(data, tick_labels=model_names, patch_artist=True)
+            
+            colors = ['lightblue', 'lightgreen', 'lightyellow', 'lightcoral', 'lightpink']
+            for patch, color in zip(bp['boxes'], colors * 10):
+                patch.set_facecolor(color)
+            
+            ax.set_ylabel('Topics per Review', fontsize=12)
+            ax.set_xlabel('Model', fontsize=12)
+            ax.set_title('Distribution of Topics Extracted per Review', fontsize=14)
+            plt.xticks(rotation=15, ha='right')
+            
+            chart_path = charts_dir / "topics_per_review.png"
+            plt.tight_layout()
+            plt.savefig(chart_path, dpi=150)
+            plt.close()
+            created_files.append(str(chart_path))
+    
+    # 5. Score Distribution by Model (if scores available)
+    scores_by_model: dict[str, list[int]] = defaultdict(list)
+    for r in reviews:
+        score = r.get("score")
+        if score is not None:
+            scores_by_model[r.get("model", "unknown")].append(score)
+    
+    if any(scores_by_model.values()):
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        model_names = []
+        data = []
+        for model, scores in sorted(scores_by_model.items()):
+            if scores:
+                model_names.append(model.split('/')[-1][:25])
+                data.append(scores)
+        
+        if data:
+            bp = ax.boxplot(data, tick_labels=model_names, patch_artist=True)
+            
+            colors = ['steelblue', 'coral', 'seagreen', 'orchid', 'goldenrod']
+            for patch, color in zip(bp['boxes'], colors * 10):
+                patch.set_facecolor(color)
+            
+            ax.set_ylabel('Review Score (1-10)', fontsize=12)
+            ax.set_xlabel('Model', fontsize=12)
+            ax.set_title('Score Distribution by Model', fontsize=14)
+            ax.set_ylim(0, 11)
+            plt.xticks(rotation=15, ha='right')
+            
+            chart_path = charts_dir / "score_distribution.png"
+            plt.tight_layout()
+            plt.savefig(chart_path, dpi=150)
+            plt.close()
+            created_files.append(str(chart_path))
+    
+    # 6. Latency Distribution by Model (if available)
+    latency_by_model: dict[str, list[float]] = defaultdict(list)
+    for r in reviews:
+        latency = r.get("meta", {}).get("latency_ms")
+        if latency is not None and latency > 0:
+            latency_by_model[r.get("model", "unknown")].append(latency / 1000)  # Convert to seconds
+    
+    if any(latency_by_model.values()):
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        model_names = []
+        data = []
+        for model, latencies in sorted(latency_by_model.items()):
+            if latencies:
+                model_names.append(model.split('/')[-1][:25])
+                data.append(latencies)
+        
+        if data:
+            bp = ax.boxplot(data, tick_labels=model_names, patch_artist=True)
+            
+            colors = ['lightblue', 'lightgreen', 'lightyellow', 'lightcoral']
+            for patch, color in zip(bp['boxes'], colors * 10):
+                patch.set_facecolor(color)
+            
+            ax.set_ylabel('Latency (seconds)', fontsize=12)
+            ax.set_xlabel('Model', fontsize=12)
+            ax.set_title('Generation Latency by Model', fontsize=14)
+            plt.xticks(rotation=15, ha='right')
+            
+            chart_path = charts_dir / "latency_distribution.png"
+            plt.tight_layout()
+            plt.savefig(chart_path, dpi=150)
+            plt.close()
+            created_files.append(str(chart_path))
+    
+    return created_files
+
+
+def write_consolidated_report(
+    metrics: list[PairMetrics],
+    topic_results: list[TopicResult],
+    reviews: list[dict],
+    output_path: Path,
+    extractor: str,
+    chart_files: list[str],
+) -> None:
+    """Write a consolidated JSON report with all data."""
+    # Group metrics by model pair
+    by_pair: dict[str, list[dict]] = defaultdict(list)
+    for m in metrics:
+        pair_key = f"{m.model_a} vs {m.model_b}"
+        by_pair[pair_key].append({
+            "paper_id": m.paper_id,
+            "jaccard": round(m.jaccard, 4),
+            "overlap_count": m.overlap_count,
+            "union_count": m.union_count,
+            "topics_a": m.topics_a,
+            "topics_b": m.topics_b,
+            "topics_only_a": m.topics_only_a,
+            "topics_only_b": m.topics_only_b,
+        })
+    
+    # Compute aggregate stats per pair
+    pair_summaries = {}
+    for pair_key, pair_metrics in by_pair.items():
+        jaccards = [m["jaccard"] for m in pair_metrics]
+        overlaps = [m["overlap_count"] for m in pair_metrics]
+        unions = [m["union_count"] for m in pair_metrics]
+        
+        # Count unique topics per model
+        all_only_a: Counter = Counter()
+        all_only_b: Counter = Counter()
+        for m in pair_metrics:
+            all_only_a.update(m["topics_only_a"])
+            all_only_b.update(m["topics_only_b"])
+        
+        pair_summaries[pair_key] = {
+            "num_papers": len(pair_metrics),
+            "jaccard": {
+                "mean": round(mean(jaccards), 4),
+                "median": round(median(jaccards), 4),
+                "min": round(min(jaccards), 4),
+                "max": round(max(jaccards), 4),
+            },
+            "overlap": {
+                "mean": round(mean(overlaps), 2),
+                "median": round(median(overlaps), 2),
+            },
+            "union": {
+                "mean": round(mean(unions), 2),
+                "median": round(median(unions), 2),
+            },
+            "top_unique_topics_a": dict(all_only_a.most_common(10)),
+            "top_unique_topics_b": dict(all_only_b.most_common(10)),
+        }
+    
+    # Model-level stats
+    model_stats = {}
+    by_model: dict[str, list] = defaultdict(list)
+    for tr in topic_results:
+        by_model[tr.model].append(tr)
+    
+    for model, trs in by_model.items():
+        topic_counts = [len(tr.topics) for tr in trs]
+        all_topics: Counter = Counter()
+        for tr in trs:
+            all_topics.update(tr.topics)
+        
+        # Get scores and latency from reviews
+        model_reviews = [r for r in reviews if r.get("model") == model]
+        scores = [r.get("score") for r in model_reviews if r.get("score") is not None]
+        latencies = [r.get("meta", {}).get("latency_ms") for r in model_reviews 
+                     if r.get("meta", {}).get("latency_ms") is not None]
+        
+        model_stats[model] = {
+            "num_reviews": len(trs),
+            "topics_per_review": {
+                "mean": round(mean(topic_counts), 2) if topic_counts else 0,
+                "median": round(median(topic_counts), 2) if topic_counts else 0,
+            },
+            "top_topics": dict(all_topics.most_common(15)),
+            "unique_topics_count": len(all_topics),
+            "scores": {
+                "mean": round(mean(scores), 2) if scores else None,
+                "median": round(median(scores), 2) if scores else None,
+                "count": len(scores),
+            },
+            "latency_ms": {
+                "mean": round(mean(latencies), 0) if latencies else None,
+                "median": round(median(latencies), 0) if latencies else None,
+            },
+        }
+    
+    # Overall stats
+    all_jaccards = [m.jaccard for m in metrics]
+    all_overlaps = [m.overlap_count for m in metrics]
+    
+    report = {
+        "metadata": {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "extractor": extractor,
+            "total_reviews": len(reviews),
+            "total_papers": len(set(r.get("paper_id") for r in reviews)),
+            "models": list(by_model.keys()),
+            "total_pairwise_comparisons": len(metrics),
+        },
+        "overall_statistics": {
+            "jaccard": {
+                "mean": round(mean(all_jaccards), 4) if all_jaccards else None,
+                "median": round(median(all_jaccards), 4) if all_jaccards else None,
+                "min": round(min(all_jaccards), 4) if all_jaccards else None,
+                "max": round(max(all_jaccards), 4) if all_jaccards else None,
+            },
+            "overlap": {
+                "mean": round(mean(all_overlaps), 2) if all_overlaps else None,
+                "median": round(median(all_overlaps), 2) if all_overlaps else None,
+            },
+        },
+        "model_statistics": model_stats,
+        "pairwise_summaries": pair_summaries,
+        "pairwise_details": dict(by_pair),
+        "charts": chart_files,
+    }
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate topic coverage between model-generated reviews."
@@ -596,6 +949,21 @@ def main() -> None:
     write_summary(metrics, topic_results, summary_file, args.extractor)
     print(f"Saved summary: {summary_file}")
     
+    # Generate charts
+    print("\nGenerating charts...")
+    chart_files = generate_charts(metrics, topic_results, reviews, args.output_dir)
+    if chart_files:
+        print(f"Generated {len(chart_files)} charts in {args.output_dir / 'charts'}")
+        for cf in chart_files:
+            print(f"  - {Path(cf).name}")
+    
+    # Write consolidated report
+    report_file = args.output_dir / "evaluation_report.json"
+    write_consolidated_report(
+        metrics, topic_results, reviews, report_file, args.extractor, chart_files
+    )
+    print(f"Saved consolidated report: {report_file}")
+    
     # Print quick summary
     print(f"\n{'='*60}")
     print("EVALUATION SUMMARY")
@@ -607,6 +975,12 @@ def main() -> None:
     print(f"Mean Jaccard: {mean(jaccards):.4f}")
     print(f"Median Jaccard: {median(jaccards):.4f}")
     print(f"Mean topic overlap: {mean(overlaps):.1f}")
+    
+    print(f"\nAll results saved to: {args.output_dir}")
+    print("Key files:")
+    print(f"  - evaluation_report.json  (consolidated data)")
+    print(f"  - topic_eval_summary.md   (human-readable summary)")
+    print(f"  - charts/                 (visualizations)")
 
 
 if __name__ == "__main__":

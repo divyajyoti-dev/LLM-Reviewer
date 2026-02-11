@@ -7,3 +7,4 @@ pydantic
 llama-cpp-python
 pytest
 httpx
+matplotlib
