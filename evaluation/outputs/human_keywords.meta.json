@@ -1,0 +1,13 @@
+{
+  "phase": 1,
+  "description": "Extract canonical keywords from human reviews",
+  "model": "deepseek-ai/DeepSeek-V3",
+  "input_file": "data/processed/review_subset_enriched.jsonl",
+  "papers_processed": 200,
+  "success_count": 200,
+  "total_keywords": 3146,
+  "total_strengths": 816,
+  "total_weaknesses": 1261,
+  "elapsed_seconds": 146.645378,
+  "timestamp": "2026-02-17T22:41:41.224557+00:00"
+}

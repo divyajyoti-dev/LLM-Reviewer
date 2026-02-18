@@ -1,0 +1,9 @@
+{
+  "phase": 3,
+  "description": "Compare LLM reviews to human keywords",
+  "papers_compared": 199,
+  "total_comparisons": 1000,
+  "mean_fuzzy_recall": 0.42046027534556946,
+  "mean_f1_score": 0.4002449919748032,
+  "timestamp": "2026-02-17T22:56:31.304774+00:00"
+}
