@@ -7,3 +7,4 @@ data/private/
 data/*.db
 .DS_Store
 models/
+evaluation_v3/outputs/
