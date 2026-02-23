@@ -4,15 +4,6 @@ Research prototype for LLM-based peer review simulation. Enables comparison betw
 
 ---
 
-## Key Capabilities
-
-- **Data Ingestion**: Export clean subsets from SQLite with year filtering, min-length validation, deterministic sampling
-- **LLM Enrichment**: Classify papers by research area using Together AI / cloud LLMs
-- **Review Generation**: Generate synthetic reviews using mock or local Llama models (GGUF + Metal)
-- **Evaluation**: Compare generated vs human reviews using TF-IDF cosine, Jaccard similarity, score diff
-
----
-
 ## Project Structure
 
 ```
